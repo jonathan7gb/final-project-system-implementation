@@ -8,7 +8,7 @@
 
 ## 1. Objetivo
 
-API REST para gestão de pedidos de peças industriais com fluxo request → approval → fulfillment. Quatro papéis: `COLABORADOR`, `APROVADOR`, `ALMOXARIFE`, `ADMIN`.
+API REST para gestão de pedidos de peças industriais com fluxo request → approval → fulfillment. Quatro papéis: `EMPLOYEE`, `APPROVER`, `STOREKEEPER`, `ADMIN`.
 
 ---
 
@@ -93,7 +93,7 @@ identity.users
   name        VARCHAR(100) NOT NULL
   email       VARCHAR(150) UNIQUE NOT NULL
   password    VARCHAR(255) NOT NULL  -- bcrypt
-  role        ENUM(COLABORADOR, APROVADOR, ALMOXARIFE, ADMIN)
+  role        ENUM(EMPLOYEE, APPROVER, STOREKEEPER, ADMIN)
   active      BOOLEAN DEFAULT true
   created_at  TIMESTAMP
   updated_at  TIMESTAMP
@@ -110,15 +110,15 @@ public interface UserDetailsPort { ... }  // extend Spring UserDetailsService
 
 ### Endpoints
 
-| Método | Path                  | Roles    | Descrição                          |
-|--------|-----------------------|----------|------------------------------------|
-| POST   | `/auth/login`         | público  | Autentica, retorna JWT             |
-| GET    | `/users`              | ADMIN    | Lista usuários                     |
-| POST   | `/users`              | ADMIN    | Cria usuário                       |
-| PUT    | `/users/{id}`         | ADMIN    | Edita usuário (incluindo role)     |
-| PATCH  | `/users/{id}/deactivate` | ADMIN | Desativa usuário                  |
-| GET    | `/users/me`           | *        | Perfil próprio                     |
-| PUT    | `/users/me`           | *        | Edita perfil próprio (nome, senha) |
+| Método | Path                        | Roles    | Descrição                          |
+|--------|-----------------------------|----------|------------------------------------|
+| POST   | `/auth/login`               | público  | Autentica, retorna JWT             |
+| GET    | `/users`                    | ADMIN    | Lista usuários                     |
+| POST   | `/users`                    | ADMIN    | Cria usuário                       |
+| PUT    | `/users/{id}`               | ADMIN    | Edita usuário (incluindo role)     |
+| PATCH  | `/users/{id}/deactivate`    | ADMIN    | Desativa usuário                   |
+| GET    | `/users/me`                 | *        | Perfil próprio                     |
+| PUT    | `/users/me`                 | *        | Edita perfil próprio (nome, senha) |
 
 ### JWT
 
@@ -180,24 +180,24 @@ public interface StockCheckPort {
 
 ### Endpoints
 
-| Método | Path                        | Roles                    | Descrição                      |
-|--------|-----------------------------|--------------------------|--------------------------------|
-| GET    | `/parts`                    | *                        | Lista peças ativas             |
-| GET    | `/parts/{id}`               | *                        | Detalhe da peça                |
-| POST   | `/parts`                    | ADMIN, ALMOXARIFE        | Cadastra peça                  |
-| PUT    | `/parts/{id}`               | ADMIN, ALMOXARIFE        | Edita peça                     |
-| POST   | `/parts/{id}/stock-entries` | ADMIN, ALMOXARIFE        | Entrada manual de estoque      |
-| GET    | `/parts/{id}/stock-entries` | ADMIN, ALMOXARIFE        | Histórico de entradas          |
+| Método | Path                          | Roles                    | Descrição                      |
+|--------|-------------------------------|--------------------------|--------------------------------|
+| GET    | `/parts`                      | *                        | Lista peças ativas             |
+| GET    | `/parts/{id}`                 | *                        | Detalhe da peça                |
+| POST   | `/parts`                      | ADMIN, STOREKEEPER       | Cadastra peça                  |
+| PUT    | `/parts/{id}`                 | ADMIN, STOREKEEPER       | Edita peça                     |
+| POST   | `/parts/{id}/stock-entries`   | ADMIN, STOREKEEPER       | Entrada manual de estoque      |
+| GET    | `/parts/{id}/stock-entries`   | ADMIN, STOREKEEPER       | Histórico de entradas          |
 
 ### Regras de estoque
 
 - `qty_available = qty_in_stock - qty_reserved`
 - `StockCheckPort` verifica `qty_available >= requestedQty`.
-- Reserva (`PedidoAprovadoEvent`): incrementa `qty_reserved`.
-- Conclusão (`PedidoConcluidoEvent`): decrementa `qty_in_stock` e `qty_reserved`.
-- Rejeição (`PedidoRejeitadoEvent`): decrementa `qty_reserved`.
+- Reserva (`OrderApprovedEvent`): incrementa `qty_reserved`.
+- Conclusão (`OrderCompletedEvent`): decrementa `qty_in_stock` e `qty_reserved`.
+- Rejeição (`OrderRejectedEvent`): decrementa `qty_reserved`.
 - Todas as operações de estoque são **idempotentes** — verificar estado antes de aplicar.
-- Publica `EstoqueInsuficienteEvent` quando `qty_in_stock - qty_reserved < qty_minimum` após qualquer movimentação.
+- Publica `InsufficientStockEvent` quando `qty_in_stock - qty_reserved < qty_minimum` após qualquer movimentação.
 
 ### Critérios de aceite
 
@@ -218,9 +218,9 @@ public interface StockCheckPort {
 orders.orders
   id              UUID PK
   requester_id    UUID NOT NULL    -- ref identity.users (sem FK cross-schema)
-  status          ENUM(PENDENTE, APROVADO, REJEITADO, CONCLUIDO)
+  status          ENUM(PENDING, APPROVED, REJECTED, COMPLETED)
   justification   TEXT NOT NULL
-  rejection_note  TEXT             -- obrigatório se status = REJEITADO
+  rejection_note  TEXT             -- obrigatório se status = REJECTED
   reviewed_by     UUID             -- ref identity.users (sem FK cross-schema)
   reviewed_at     TIMESTAMP
   created_at      TIMESTAMP
@@ -242,26 +242,26 @@ Anotações JPA: `@Table(schema = "orders", name = "orders")` e `@Table(schema =
 ### Eventos publicados (raiz do pacote `orders/`)
 
 ```java
-public record PedidoCriadoEvent(UUID orderId, UUID requesterId, List<ItemRef> items) {}
-public record PedidoAprovadoEvent(UUID orderId, UUID reviewerId, List<ItemRef> items) {}
-public record PedidoRejeitadoEvent(UUID orderId, UUID reviewerId, String rejectionNote, List<ItemRef> items) {}
-public record PedidoConcluidoEvent(UUID orderId, UUID almoxarifeId, List<ItemRef> items) {}
+public record OrderCreatedEvent(UUID orderId, UUID requesterId, List<ItemRef> items) {}
+public record OrderApprovedEvent(UUID orderId, UUID reviewerId, List<ItemRef> items) {}
+public record OrderRejectedEvent(UUID orderId, UUID reviewerId, String rejectionNote, List<ItemRef> items) {}
+public record OrderCompletedEvent(UUID orderId, UUID storekeeperId, List<ItemRef> items) {}
 
 public record ItemRef(UUID partId, int quantity) {}
 ```
 
 ### Endpoints
 
-| Método | Path                         | Roles                  | Descrição                            |
-|--------|------------------------------|------------------------|--------------------------------------|
-| POST   | `/orders`                    | COLABORADOR            | Cria pedido (dispara check de estoque)|
-| GET    | `/orders`                    | COLABORADOR            | Lista próprios pedidos               |
-| GET    | `/orders/{id}`               | COLABORADOR, APROVADOR, ALMOXARIFE, ADMIN | Detalhe       |
-| GET    | `/orders/pending`            | APROVADOR              | Fila de pedidos pendentes            |
-| POST   | `/orders/{id}/approve`       | APROVADOR              | Aprova pedido                        |
-| POST   | `/orders/{id}/reject`        | APROVADOR              | Rejeita (body: `rejectionNote`)      |
-| GET    | `/orders/approved`           | ALMOXARIFE             | Lista pedidos aprovados aguardando   |
-| POST   | `/orders/{id}/complete`      | ALMOXARIFE             | Marca como concluído                 |
+| Método | Path                           | Roles                                      | Descrição                             |
+|--------|--------------------------------|--------------------------------------------|---------------------------------------|
+| POST   | `/orders`                      | EMPLOYEE                                   | Cria pedido (dispara check de estoque)|
+| GET    | `/orders`                      | EMPLOYEE                                   | Lista próprios pedidos                |
+| GET    | `/orders/{id}`                 | EMPLOYEE, APPROVER, STOREKEEPER, ADMIN     | Detalhe                               |
+| GET    | `/orders/pending`              | APPROVER                                   | Fila de pedidos pendentes             |
+| POST   | `/orders/{id}/approve`         | APPROVER                                   | Aprova pedido                         |
+| POST   | `/orders/{id}/reject`          | APPROVER                                   | Rejeita (body: `rejectionNote`)       |
+| GET    | `/orders/approved`             | STOREKEEPER                                | Lista pedidos aprovados aguardando    |
+| POST   | `/orders/{id}/complete`        | STOREKEEPER                                | Marca como concluído                  |
 
 ### Fluxo de criação (RF06 + RF07)
 
@@ -270,16 +270,16 @@ POST /orders
   → valida payload
   → para cada item: StockCheckPort.checkAvailability(partId, qty)
   → se algum item indisponível: retorna 422 com detalhe por item
-  → persiste order com status PENDENTE
-  → publishEvent(PedidoCriadoEvent)
+  → persiste order com status PENDING
+  → publishEvent(OrderCreatedEvent)
 ```
 
 ### Critérios de aceite
 
 - [ ] Pedido com item sem estoque retorna `422` com lista dos itens problemáticos.
-- [ ] COLABORADOR não vê pedidos de outros usuários em `GET /orders`.
-- [ ] Apenas pedidos `PENDENTE` podem ser aprovados ou rejeitados.
-- [ ] Apenas pedidos `APROVADO` podem ser concluídos.
+- [ ] EMPLOYEE não vê pedidos de outros usuários em `GET /orders`.
+- [ ] Apenas pedidos `PENDING` podem ser aprovados ou rejeitados.
+- [ ] Apenas pedidos `APPROVED` podem ser concluídos.
 - [ ] Rejeição sem `rejectionNote` retorna `400`.
 - [ ] Todos os eventos são publicados dentro da mesma transação que persiste a mudança de status.
 
@@ -291,13 +291,13 @@ POST /orders
 
 ### Consumo de eventos
 
-| Evento                   | Destinatário         | Assunto (sugerido)                        |
-|--------------------------|----------------------|-------------------------------------------|
-| `PedidoCriadoEvent`      | APROVADOR(es)        | "Novo pedido aguardando aprovação #..."   |
-| `PedidoAprovadoEvent`    | solicitante          | "Seu pedido foi aprovado"                 |
-| `PedidoAprovadoEvent`    | ALMOXARIFE(s)        | "Pedido aprovado para separação #..."     |
-| `PedidoRejeitadoEvent`   | solicitante          | "Seu pedido foi rejeitado"                |
-| `EstoqueInsuficienteEvent`| ALMOXARIFE(s)       | "Estoque baixo: {part_name}"              |
+| Evento                    | Destinatário         | Assunto (sugerido)                           |
+|---------------------------|----------------------|----------------------------------------------|
+| `OrderCreatedEvent`       | APPROVER(s)          | "New order awaiting approval #..."           |
+| `OrderApprovedEvent`      | solicitante          | "Your order has been approved"               |
+| `OrderApprovedEvent`      | STOREKEEPER(s)       | "Approved order ready for separation #..."   |
+| `OrderRejectedEvent`      | solicitante          | "Your order has been rejected"               |
+| `InsufficientStockEvent`  | STOREKEEPER(s)       | "Low stock alert: {part_name}"               |
 
 ### Implementação
 
@@ -333,13 +333,13 @@ Anotação JPA: `@Table(schema = "audit", name = "logs")`
 
 ## 9. Contrato de Eventos (resumo)
 
-| Evento                     | Publicador  | Consumidores                         |
-|----------------------------|-------------|--------------------------------------|
-| `PedidoCriadoEvent`        | Orders      | Notification                         |
-| `PedidoAprovadoEvent`      | Orders      | Inventory, Notification, Audit       |
-| `PedidoRejeitadoEvent`     | Orders      | Inventory, Notification, Audit       |
-| `PedidoConcluidoEvent`     | Orders      | Inventory, Audit                     |
-| `EstoqueInsuficienteEvent` | Inventory   | Notification                         |
+| Evento                    | Publicador  | Consumidores                         |
+|---------------------------|-------------|--------------------------------------|
+| `OrderCreatedEvent`       | Orders      | Notification                         |
+| `OrderApprovedEvent`      | Orders      | Inventory, Notification, Audit       |
+| `OrderRejectedEvent`      | Orders      | Inventory, Notification, Audit       |
+| `OrderCompletedEvent`     | Orders      | Inventory, Audit                     |
+| `InsufficientStockEvent`  | Inventory   | Notification                         |
 
 ---
 
@@ -347,7 +347,7 @@ Anotação JPA: `@Table(schema = "audit", name = "logs")`
 
 ```
 Aula 1
-├── [todos]   Setup: Flyway, estrutura de pacotes, tabelas iniciais
+├── [todos]    Setup: Flyway, estrutura de pacotes, tabelas iniciais
 ├── [1 pessoa] Identity: entidade, repositório, serviço, endpoints de usuário
 ├── [1 pessoa] Identity: JWT filter + Spring Security config
 ├── [1 pessoa] Inventory: entidade, repositório, StockCheckPort, endpoints de catálogo
@@ -356,7 +356,7 @@ Aula 1
 Aula 2
 ├── [1 pessoa] Orders: entidade, criação com stock check síncrono
 ├── [1 pessoa] Orders: aprovação, rejeição, conclusão + publicação de eventos
-├── [1 pessoa] Inventory: handlers de PedidoAprovadoEvent / Rejeitado / Concluido
+├── [1 pessoa] Inventory: handlers de OrderApprovedEvent / Rejected / Completed
 ├── [1 pessoa] Notification: setup Spring Mail + handlers dos eventos
 └── [integração] Smoke tests do fluxo completo
 
@@ -404,7 +404,6 @@ services:
     volumes:
       - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
       - postgres_data:/var/lib/postgresql/data
-    # ... restante da config existente
 ```
 
 > O init script só roda na **primeira inicialização** do container (volume vazio). Para recriar do zero: `docker-compose down -v && docker-compose up -d`.
@@ -415,16 +414,6 @@ services:
 spring.flyway.default-schema=identity
 spring.flyway.schemas=identity,orders,inventory,notification,audit
 spring.flyway.locations=classpath:db/migration
-```
-
-O `flyway_schema_history` fica no schema `identity` (default). Cada migration usa nomes qualificados:
-
-```sql
--- V1__identity_create_users.sql
-CREATE TABLE identity.users ( ... );
-
--- V2__inventory_create_parts.sql
-CREATE TABLE inventory.parts ( ... );
 ```
 
 ### 4. Estrutura de pacotes `internal/` em cada módulo
@@ -471,8 +460,8 @@ MAIL_PORT=1025
 
 ## 12. Decisões em Aberto
 
-| Decisão                                     | Impacto        | Prazo      |
-|---------------------------------------------|----------------|------------|
-| Como Notification busca emails por role?    | Notification   | Aula 1     |
-| Paginação de listagens (tamanho padrão?)    | Orders, Inventory | Aula 1  |
-| Token de refresh ou somente access token?  | Identity       | Aula 1     |
+| Decisão                                     | Impacto           | Prazo      |
+|---------------------------------------------|-------------------|------------|
+| Como Notification busca emails por role?    | Notification      | Aula 1     |
+| Paginação de listagens (tamanho padrão?)    | Orders, Inventory | Aula 1     |
+| Token de refresh ou somente access token?  | Identity          | Aula 1     |

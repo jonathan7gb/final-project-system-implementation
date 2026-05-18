@@ -27,4 +27,4 @@ Usar **AWS** com ECS Fargate (compute), RDS PostgreSQL (banco) e SES (email).
 - Necessário um **Dockerfile** na raiz do projeto para build da imagem.
 - **Spring Boot Actuator** (`/actuator/health`) é obrigatório para o health check do ALB.
 - Credenciais (`JWT_SECRET`, `DB_PASSWORD`, `MAIL_PASSWORD`) devem ser armazenadas no Secrets Manager — nunca em variáveis de ambiente hardcoded no task definition do ECS.
-- Custo estimado baixo para o volume do projeto (RDS `db.t3.micro` + Fargate spot).
+- Custo estimado baixo para o volume do projeto (RDS `db.t3.micro` + Fargate Spot).
