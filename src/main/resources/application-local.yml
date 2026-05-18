@@ -1,0 +1,10 @@
+spring:
+  config:
+    activate:
+      on-profile: local
+  datasource:
+    url: jdbc:postgresql://localhost:5432/implantation_db
+    username: implantation_user
+    password: implantation_pass
+  jpa:
+    show-sql: true # habilita a exibição das consultas SQL no console para facilitar o desenvolvimento e depuração
