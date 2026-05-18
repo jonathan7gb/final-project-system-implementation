@@ -54,17 +54,29 @@ com.centroweg.senai.system_deployment_project_api.
 
 ### Banco de dados
 
-Cada módulo é dono das suas tabelas. Prefixo obrigatório por módulo:
+Cada módulo é dono do seu próprio **PostgreSQL schema**. Isso espelha no banco os mesmos limites que o Spring Modulith impõe no código — nenhum módulo acessa tabelas de outro.
 
-| Módulo      | Prefixo de tabela   |
-|-------------|---------------------|
-| identity    | `idt_`              |
-| orders      | `ord_`              |
-| inventory   | `inv_`              |
-| notification| `ntf_`              |
-| audit       | `aud_`              |
+| Módulo       | Schema PostgreSQL |
+|--------------|------------------|
+| identity     | `identity`       |
+| orders       | `orders`         |
+| inventory    | `inventory`      |
+| notification | `notification`   |
+| audit        | `audit`          |
 
-Migrations Flyway em `src/main/resources/db/migration/` com formato `V{n}__{modulo}_{descricao}.sql`.
+Os schemas são criados por um init script do Docker antes do Flyway rodar (ver Seção 11).
+
+**Flyway** gerencia todos os schemas a partir de um único datasource. As migrations usam nomes de tabela qualificados com o schema:
+
+```sql
+-- V1__identity_create_users.sql
+CREATE TABLE identity.users ( ... );
+```
+
+Formato das migrations: `V{n}__{modulo}_{descricao}.sql`  
+Local: `src/main/resources/db/migration/`
+
+**Sem FKs cross-schema.** Referências entre módulos são por UUID simples, sem constraint de FK no banco — mesma regra do código.
 
 ---
 
@@ -75,7 +87,8 @@ Migrations Flyway em `src/main/resources/db/migration/` com formato `V{n}__{modu
 ### Entidades
 
 ```
-idt_users
+-- schema: identity
+identity.users
   id          UUID PK
   name        VARCHAR(100) NOT NULL
   email       VARCHAR(150) UNIQUE NOT NULL
@@ -85,6 +98,8 @@ idt_users
   created_at  TIMESTAMP
   updated_at  TIMESTAMP
 ```
+
+Anotação JPA: `@Table(schema = "identity", name = "users")`
 
 ### API pública do módulo (raiz do pacote)
 
