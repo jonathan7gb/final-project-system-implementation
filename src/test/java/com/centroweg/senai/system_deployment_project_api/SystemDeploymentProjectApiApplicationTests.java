@@ -8,6 +8,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest
+@org.springframework.test.context.ActiveProfiles("test")
 @Testcontainers
 class SystemDeploymentProjectApiApplicationTests {
 
