@@ -1,9 +1,7 @@
 package com.centroweg.senai.system_deployment_project_api.inventory.internal.application;
 
-import com.centroweg.senai.system_deployment_project_api.inventory.internal.domain.exception.PartNotFoundException;
 import com.centroweg.senai.system_deployment_project_api.inventory.internal.domain.model.OrderStockEventType;
 import com.centroweg.senai.system_deployment_project_api.inventory.internal.domain.model.Part;
-import com.centroweg.senai.system_deployment_project_api.inventory.internal.domain.repository.PartRepository;
 import com.centroweg.senai.system_deployment_project_api.inventory.internal.domain.repository.ProcessedOrderEventRepository;
 import com.centroweg.senai.system_deployment_project_api.orders.ItemRef;
 import com.centroweg.senai.system_deployment_project_api.orders.PedidoAprovadoEvent;
@@ -19,12 +17,13 @@ import org.springframework.transaction.annotation.Transactional;
 public class OrderStockService {
 
     private final ProcessedOrderEventRepository processedOrderEventRepository;
-    private final PartRepository partRepository;
+    private final PartStockMovementService partStockMovementService;
 
     public OrderStockService(
-            ProcessedOrderEventRepository processedOrderEventRepository, PartRepository partRepository) {
+            ProcessedOrderEventRepository processedOrderEventRepository,
+            PartStockMovementService partStockMovementService) {
         this.processedOrderEventRepository = processedOrderEventRepository;
-        this.partRepository = partRepository;
+        this.partStockMovementService = partStockMovementService;
     }
 
     public void handlePedidoAprovado(PedidoAprovadoEvent event) {
@@ -53,8 +52,8 @@ public class OrderStockService {
 
     private void applyToItems(List<ItemRef> items, BiFunction<Part, Integer, Part> movement) {
         for (ItemRef item : items) {
-            Part part = partRepository.findById(item.partId()).orElseThrow(() -> new PartNotFoundException(item.partId()));
-            partRepository.save(movement.apply(part, item.quantity()));
+            partStockMovementService.applyMovement(
+                    item.partId(), part -> movement.apply(part, item.quantity()));
         }
     }
 }
