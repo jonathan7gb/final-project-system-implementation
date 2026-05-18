@@ -143,26 +143,29 @@ public interface UserDetailsPort { ... }  // extend Spring UserDetailsService
 ### Entidades
 
 ```
-inv_parts
-  id          UUID PK
-  code        VARCHAR(50) UNIQUE NOT NULL
-  name        VARCHAR(150) NOT NULL
-  unit        VARCHAR(20) NOT NULL      -- ex: "un", "kg", "m"
+-- schema: inventory
+inventory.parts
+  id           UUID PK
+  code         VARCHAR(50) UNIQUE NOT NULL
+  name         VARCHAR(150) NOT NULL
+  unit         VARCHAR(20) NOT NULL       -- ex: "un", "kg", "m"
   qty_in_stock INT NOT NULL DEFAULT 0
-  qty_reserved INT NOT NULL DEFAULT 0   -- reservado por pedidos aprovados
+  qty_reserved INT NOT NULL DEFAULT 0    -- reservado por pedidos aprovados
   qty_minimum  INT NOT NULL DEFAULT 0
-  active      BOOLEAN DEFAULT true
-  created_at  TIMESTAMP
-  updated_at  TIMESTAMP
+  active       BOOLEAN DEFAULT true
+  created_at   TIMESTAMP
+  updated_at   TIMESTAMP
 
-inv_stock_entries
-  id          UUID PK
-  part_id     UUID FK inv_parts
-  quantity    INT NOT NULL
-  note        TEXT
-  registered_by UUID FK idt_users
-  created_at  TIMESTAMP
+inventory.stock_entries
+  id              UUID PK
+  part_id         UUID NOT NULL REFERENCES inventory.parts(id)
+  quantity        INT NOT NULL
+  note            TEXT
+  registered_by   UUID NOT NULL          -- ref identity.users (sem FK cross-schema)
+  created_at      TIMESTAMP
 ```
+
+Anotações JPA: `@Table(schema = "inventory", name = "parts")` e `@Table(schema = "inventory", name = "stock_entries")`
 
 ### API pública do módulo
 
@@ -211,27 +214,30 @@ public interface StockCheckPort {
 ### Entidades
 
 ```
-ord_orders
+-- schema: orders
+orders.orders
   id              UUID PK
-  requester_id    UUID NOT NULL    -- ref a idt_users (sem FK cross-module)
+  requester_id    UUID NOT NULL    -- ref identity.users (sem FK cross-schema)
   status          ENUM(PENDENTE, APROVADO, REJEITADO, CONCLUIDO)
   justification   TEXT NOT NULL
   rejection_note  TEXT             -- obrigatório se status = REJEITADO
-  reviewed_by     UUID             -- ref a idt_users
+  reviewed_by     UUID             -- ref identity.users (sem FK cross-schema)
   reviewed_at     TIMESTAMP
   created_at      TIMESTAMP
   updated_at      TIMESTAMP
 
-ord_order_items
+orders.order_items
   id          UUID PK
-  order_id    UUID FK ord_orders
-  part_id     UUID NOT NULL        -- ref a inv_parts (sem FK cross-module)
+  order_id    UUID NOT NULL REFERENCES orders.orders(id)
+  part_id     UUID NOT NULL        -- ref inventory.parts (sem FK cross-schema)
   part_code   VARCHAR(50) NOT NULL -- snapshot no momento do pedido
   part_name   VARCHAR(150) NOT NULL
   quantity    INT NOT NULL
 ```
 
-> **Sem FKs cross-module no banco.** Referências entre módulos são por UUID com snapshot de dados relevantes (ex: `part_code`, `part_name` no item do pedido).
+> **Sem FKs cross-schema no banco.** Referências entre módulos são por UUID simples. Dados relevantes de outros módulos são copiados como snapshot no momento da criação (ex: `part_code`, `part_name`).
+
+Anotações JPA: `@Table(schema = "orders", name = "orders")` e `@Table(schema = "orders", name = "order_items")`
 
 ### Eventos publicados (raiz do pacote `orders/`)
 
@@ -317,9 +323,11 @@ POST /orders
 Implementar apenas se Identity + Orders + Inventory + Notification estiverem funcionais.
 
 - `@ApplicationEventListener` + `@Async` consome todos os eventos de domínio.
-- Persiste em `aud_logs`: `id`, `event_type`, `payload` (JSON), `user_id`, `occurred_at`.
+- Persiste em `audit.logs`: `id`, `event_type`, `payload` (JSONB), `user_id`, `occurred_at`.
 - Registro imutável — sem UPDATE ou DELETE na tabela.
 - RF26 (listagem com filtros) fica para depois do MVP.
+
+Anotação JPA: `@Table(schema = "audit", name = "logs")`
 
 ---
 
@@ -364,25 +372,100 @@ Aula 3
 
 Tarefas que devem ser feitas **uma vez** antes do time se dividir:
 
-1. Adicionar Flyway ao `pom.xml`:
-   ```xml
-   <dependency>
-     <groupId>org.flywaydb</groupId>
-     <artifactId>flyway-core</artifactId>
-   </dependency>
-   <dependency>
-     <groupId>org.flywaydb</groupId>
-     <artifactId>flyway-database-postgresql</artifactId>
-   </dependency>
-   ```
+### 1. Adicionar Flyway ao `pom.xml`
 
-2. Criar estrutura de pacotes `internal/` em cada módulo.
+```xml
+<dependency>
+  <groupId>org.flywaydb</groupId>
+  <artifactId>flyway-core</artifactId>
+</dependency>
+<dependency>
+  <groupId>org.flywaydb</groupId>
+  <artifactId>flyway-database-postgresql</artifactId>
+</dependency>
+```
 
-3. Criar a primeira migration: `V1__identity_create_users.sql`.
+### 2. Criar `docker/init.sql` — schemas PostgreSQL
 
-4. Configurar `@EnableAsync` na classe principal para os listeners assíncronos funcionarem.
+```sql
+CREATE SCHEMA IF NOT EXISTS identity;
+CREATE SCHEMA IF NOT EXISTS orders;
+CREATE SCHEMA IF NOT EXISTS inventory;
+CREATE SCHEMA IF NOT EXISTS notification;
+CREATE SCHEMA IF NOT EXISTS audit;
+```
 
-5. Adicionar Spring Mail ao `pom.xml` e Mailhog ao `docker-compose.yml`.
+Montar no `docker-compose.yml`:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    volumes:
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    # ... restante da config existente
+```
+
+> O init script só roda na **primeira inicialização** do container (volume vazio). Para recriar do zero: `docker-compose down -v && docker-compose up -d`.
+
+### 3. Configurar Flyway no `application.properties`
+
+```properties
+spring.flyway.default-schema=identity
+spring.flyway.schemas=identity,orders,inventory,notification,audit
+spring.flyway.locations=classpath:db/migration
+```
+
+O `flyway_schema_history` fica no schema `identity` (default). Cada migration usa nomes qualificados:
+
+```sql
+-- V1__identity_create_users.sql
+CREATE TABLE identity.users ( ... );
+
+-- V2__inventory_create_parts.sql
+CREATE TABLE inventory.parts ( ... );
+```
+
+### 4. Estrutura de pacotes `internal/` em cada módulo
+
+Criar subpacote `internal` dentro de cada módulo antes de qualquer classe de domínio.
+
+### 5. `@EnableAsync` na classe principal
+
+```java
+@SpringBootApplication
+@EnableAsync
+public class SystemDeploymentProjectApiApplication { ... }
+```
+
+### 6. Spring Mail + Mailhog
+
+Adicionar ao `pom.xml`:
+
+```xml
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-mail</artifactId>
+</dependency>
+```
+
+Adicionar ao `docker-compose.yml`:
+
+```yaml
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # UI web
+```
+
+Adicionar ao `.env.example`:
+
+```
+MAIL_HOST=localhost
+MAIL_PORT=1025
+```
 
 ---
 
